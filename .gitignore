@@ -1,0 +1,6 @@
+# Dlv debug binaries
+__debug*
+
+Emacs stuff
+\#*
+*~
