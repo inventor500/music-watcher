@@ -10,13 +10,31 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/godbus/dbus/v5"
+	dbus "github.com/godbus/dbus/v5"
 )
+
+type Metadata struct {
+	Album       string
+	AlbumArtist []string
+	Url         string
+	Artist      []string
+	Composer    []string
+	TrackId     string
+	Title       string
+}
 
 var ErrMetadataFailed = errors.New("failed to get metadata")
 var ErrInvalidType = errors.New("invalid type for field")
 var ErrInvalidSignalBody = errors.New("invalid body for signal")
 var ErrNoStatus = errors.New("player's new metadata has no status")
+
+var filteredPlayers = []string{
+	"playerctld",
+}
+
+// Track bus names so filtered players can be sorted out
+var busNameToName = make(map[string]string)
+var nameToBusName = make(map[string]string)
 
 const playerPath = "/org/mpris/MediaPlayer2"
 const systemBusPath = "/org/freedesktop/DBus"
@@ -31,8 +49,10 @@ type StoreCallback func(ctx context.Context, m *Metadata) error
 
 func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 
-	// TODO: Get player in loop
+	// TODO: Actually make use of this context
 	ctx := conn.Context()
+
+	slog.InfoContext(ctx, "Starting monitor of DBus")
 
 	// New players
 	if err := conn.AddMatchSignalContext(
@@ -78,56 +98,55 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 	}
 }
 
-// signal := make(chan *dbus.Signal, 10)
-// conn.Signal(signal)
-// for sig := range signal {
-
-// 	if sig.Name == ownerChanged {
-// 		if len(sig.Body) < 1 {
-// 			slog.ErrorContext(ctx, "Invalid signal body length", "Length", len(sig.Body))
-// 			continue
-// 		}
-// 		switch name := sig.Body[0].(type) {
-// 		case string:
-// 			handleNewPlayer(ctx, conn, name)
-// 		default:
-// 			slog.ErrorContext(ctx, "Received unknown type for signal body")
-// 			continue
-// 		}
-// 	}
-// }
-// player := "org.mpris.MediaPlayer2.mpv"
-// metadata, err := GetMetadata(conn.Object(player, dbus.ObjectPath(playerPath)))
-// if err != nil {
-// 	slog.Error("Failed to get metadata", "Player", player)
-// }
-// slog.Info("Received metadata", "Metadata", metadata)
-// 	return nil
-// }
-
 func handleNewPlayer(ctx context.Context, conn *dbus.Conn, sig *dbus.Signal, callback StoreCallback) error {
 	if len(sig.Body) != 3 {
 		// Should be name, oldOwner, newOwner
 		return ErrInvalidSignalBody
 	}
+	// This is the player name
 	name, nameOk := sig.Body[0].(string)
-	if !nameOk {
+	newOwner, newOk := sig.Body[0].(string)
+	oldOwner, oldOk := sig.Body[0].(string)
+	if !nameOk || !newOk || !oldOk {
 		return ErrInvalidSignalBody
 	}
+	// A new player connecting will send two signals:
+	// One for the bus (:1.<bus-num>) and one for the name we want (org.mpris.MediaPlayer2.*)
 	if strings.HasPrefix(name, "org.mpris.MediaPlayer2.") {
-		// Client connected
-		metadata, err := GetMetadata(conn.Object(name, dbus.ObjectPath(playerPath)))
-		if err != nil {
-			return err
+		if oldOwner == newOwner {
+			// Connected
+			addPlayer(conn, name)
+			if isFilteredPlayer(name) {
+				slog.Debug("Ignoring filtered player", "Player", name)
+				return nil
+			}
+			metadata, err := GetMetadata(conn.Object(name, dbus.ObjectPath(playerPath)))
+			if err != nil {
+				return err
+			}
+			return callback(ctx, metadata)
+		} else {
+			// Disconnected
+			removePlayer(name)
 		}
-		return callback(ctx, metadata)
 	}
 	return nil
 }
 
 func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreCallback) error {
-	name := sig.Sender
-	slog.Debug("Detected change in player", "Name", name)
+	bus := sig.Sender // This is the bus name
+	name, ok := busNameToName[bus]
+	if ok {
+		if isFilteredPlayer(name) {
+			slog.Debug("Ignoring filtered player", "Name", name)
+			return nil
+		}
+	} else {
+		slog.Warn("Received signal from unknown player, ignoring", "Bus", bus)
+		// TODO: This can go if we ever scan for all currently existing players at startup
+		return nil
+	}
+	slog.Debug("Detected change in player", "Name", name, "Bus", bus)
 	if len(sig.Body) < 1 {
 		return ErrInvalidSignalBody
 	}
@@ -135,32 +154,24 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 	if !ok {
 		return ErrInvalidSignalBody
 	}
-	status, hasStatus := changed["PlaybackStatus"]
-	if statusText, ok := status.Value().(string); hasStatus && ok && statusText != "Playing" {
-		slog.DebugContext(ctx, "Player has no status or status is not playing", "Name", name, "StatusText", statusText)
-		return ErrNoStatus
+	// Only the property that changed will show up here
+	// E.g. only "PlaybackStatus" or "Metadata"
+	// "Metadata" and "PlaybackStatus" both show up when MPV exits
+	if _, ok := changed["PlaybackStatus"]; ok {
+		// This is a new player connecting, resuming, etc. We don't care about this
+		return nil
 	}
-	// We only care if this is playing
+
 	_m, ok := changed["Metadata"]
 	if !ok {
 		return ErrMetadataFailed
 	}
 	metadata, ok := _m.Value().(map[string]dbus.Variant)
 	if !ok {
-		slog.Debug("Received invalid type for metadata", "Name", name)
+		slog.Debug("Received invalid type for metadata", "Name", name, "Bus", bus)
 		return ErrMetadataFailed
 	}
 	return callback(ctx, parseMetadata(metadata))
-}
-
-type Metadata struct {
-	Album       string
-	AlbumArtist []string
-	Url         string
-	Artist      []string
-	Composer    []string
-	TrackId     string
-	Title       string
 }
 
 func (m *Metadata) String() string {
@@ -216,5 +227,52 @@ func getAny[T any](value dbus.Variant) (T, error) {
 	} else {
 		var zeroVal T
 		return zeroVal, ErrInvalidType
+	}
+}
+
+func isFilteredPlayer(serviceName string) bool {
+	for _, name := range filteredPlayers {
+		if strings.HasSuffix(serviceName, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func addPlayer(conn *dbus.Conn, name string) error {
+	// Get the bus name for the player
+	systemBus := conn.Object(systemBusName, systemBusPath)
+	call := systemBus.Call(systemBusName+".GetNameOwner", 0, name)
+	if call.Err != nil {
+		return call.Err
+	}
+	var busName string
+	if err := call.Store(&busName); err != nil {
+		return err
+	}
+	busNameToName[busName] = name
+	nameToBusName[name] = busName
+	return nil
+}
+
+func removePlayer(name string) {
+	busName, ok := nameToBusName[name]
+	if !ok {
+		slog.Warn("Attempted to remove player not in mapping", "Name", name)
+		// Try to find by iterating
+		for bus, n := range busNameToName {
+			if n == name {
+				delete(busNameToName, bus)
+				break
+			}
+		}
+	} else if _, ok := busNameToName[busName]; ok {
+		// Remove both mappings
+		delete(busNameToName, busName)
+		delete(nameToBusName, name)
+	} else {
+		// Only in this mapping
+		slog.Warn("Found player in name -> bus but not bus -> name", "Name", name, "Bus", busName)
+		delete(nameToBusName, name)
 	}
 }
