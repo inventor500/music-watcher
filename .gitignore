@@ -4,3 +4,6 @@ __debug*
 Emacs stuff
 \#*
 *~
+
+# Executable
+cmd/music-watcher/music-watcher

@@ -28,6 +28,8 @@ var ErrInvalidType = errors.New("invalid type for field")
 var ErrInvalidSignalBody = errors.New("invalid body for signal")
 var ErrNoStatus = errors.New("player's new metadata has no status")
 
+// Playerctl has the current metadata of its default player as its own metadata;
+// This results in duplicate notifications from a different player.
 var filteredPlayers = []string{
 	"playerctld",
 }
@@ -35,6 +37,7 @@ var filteredPlayers = []string{
 // Track bus names so filtered players can be sorted out
 var busNameToName = make(map[string]string)
 var nameToBusName = make(map[string]string)
+var nameToCurrent = make(map[string]*Metadata)
 
 const playerPath = "/org/mpris/MediaPlayer2"
 const systemBusPath = "/org/freedesktop/DBus"
@@ -82,6 +85,8 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// TODO: Scan to populate player maps with existing players
+
 	for {
 		select {
 		case sig := <-dbusChan:
@@ -124,6 +129,7 @@ func handleNewPlayer(ctx context.Context, conn *dbus.Conn, sig *dbus.Signal, cal
 			if err != nil {
 				return err
 			}
+			nameToCurrent[name] = metadata
 			return callback(ctx, metadata)
 		} else {
 			// Disconnected
@@ -143,7 +149,6 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 		}
 	} else {
 		slog.Warn("Received signal from unknown player, ignoring", "Bus", bus)
-		// TODO: This can go if we ever scan for all currently existing players at startup
 		return nil
 	}
 	slog.Debug("Detected change in player", "Name", name, "Bus", bus)
@@ -171,7 +176,15 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 		slog.Debug("Received invalid type for metadata", "Name", name, "Bus", bus)
 		return ErrMetadataFailed
 	}
-	return callback(ctx, parseMetadata(metadata))
+	metaParsed := parseMetadata(metadata)
+	if current, ok := nameToCurrent[name]; !ok || !current.IsSameTrack(metaParsed) {
+		nameToCurrent[name] = metaParsed
+		return callback(ctx, metaParsed)
+	}
+	// Some players send 8 notifications every time they change
+	// This was observed while listening to Spotify with Firefox
+	slog.DebugContext(ctx, "Received duplicate notification", "Name", name, "Bus", bus, "Url", metaParsed.Url)
+	return nil
 }
 
 func (m *Metadata) String() string {
@@ -275,4 +288,8 @@ func removePlayer(name string) {
 		slog.Warn("Found player in name -> bus but not bus -> name", "Name", name, "Bus", busName)
 		delete(nameToBusName, name)
 	}
+}
+
+func (m *Metadata) IsSameTrack(other *Metadata) bool {
+	return m.Url == other.Url
 }
