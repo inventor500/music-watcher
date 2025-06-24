@@ -168,11 +168,11 @@ func CreateDatabaseStructure(conn *sql.DB) error {
 		return err
 	}
 	for _, stmt := range []string{
-		"CREATE TABLE Album (id INTEGER PRIMARY KEY, title TEXT)",
-		"CREATE TABLE Track (id INTEGER PRIMARY KEY, title TEXT, trackId TEXT, url TEXT, album INTEGER)",
-		"CREATE TABLE Person(id INTEGER PRIMARY KEY, name TEXT)",
-		"CREATE TABLE TrackLog (id INTEGER PRIMARY KEY, track TEXT, timestamp DATETIME)",
-		"CREATE TABLE Track_Person(id INTEGER PRIMARY KEY, track INTEGER, person INTEGER)",
+		"CREATE TABLE IF NOT EXISTS Album (id INTEGER PRIMARY KEY, title TEXT)",
+		"CREATE TABLE IF NOT EXISTS Track (id INTEGER PRIMARY KEY, title TEXT, trackId TEXT, url TEXT, album INTEGER)",
+		"CREATE TABLE IF NOT EXISTS Person(id INTEGER PRIMARY KEY, name TEXT)",
+		"CREATE TABLE IF NOT EXISTS TrackLog (id INTEGER PRIMARY KEY, track TEXT, timestamp DATETIME)",
+		"CREATE TABLE IF NOT EXISTS Track_Person(id INTEGER PRIMARY KEY, track INTEGER, person INTEGER)",
 	} {
 		_, err := tx.Exec(stmt)
 		if err != nil {
@@ -180,5 +180,5 @@ func CreateDatabaseStructure(conn *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
