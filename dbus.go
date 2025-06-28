@@ -55,6 +55,18 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 	// TODO: Actually make use of this context
 	ctx := conn.Context()
 
+	slog.InfoContext(ctx, "Getting existing players")
+	if current, err := GetExistingPlayers(ctx, conn); err != nil {
+		return errors.Join(fmt.Errorf("unable to get list of existing players"), err)
+	} else {
+		for _, name := range current {
+			if strings.HasPrefix(name, "org.mpris.MediaPlayer2.") {
+				slog.Debug("Detected new player", "Name", name)
+				handleNewPlayer(ctx, conn, name, callback)
+			}
+		}
+	}
+
 	slog.InfoContext(ctx, "Starting monitor of DBus")
 
 	// New players
@@ -92,7 +104,7 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 		case sig := <-dbusChan:
 			switch sig.Name {
 			case nameOwnerSignal:
-				handleNewPlayer(ctx, conn, sig, callback)
+				handleNewPlayerSignal(ctx, conn, sig, callback)
 			case propertySignal:
 				handlePropertyChange(ctx, sig, callback)
 			}
@@ -103,7 +115,7 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 	}
 }
 
-func handleNewPlayer(ctx context.Context, conn *dbus.Conn, sig *dbus.Signal, callback StoreCallback) error {
+func handleNewPlayerSignal(ctx context.Context, conn *dbus.Conn, sig *dbus.Signal, callback StoreCallback) error {
 	if len(sig.Body) != 3 {
 		// Should be name, oldOwner, newOwner
 		return ErrInvalidSignalBody
@@ -119,24 +131,28 @@ func handleNewPlayer(ctx context.Context, conn *dbus.Conn, sig *dbus.Signal, cal
 	// One for the bus (:1.<bus-num>) and one for the name we want (org.mpris.MediaPlayer2.*)
 	if strings.HasPrefix(name, "org.mpris.MediaPlayer2.") {
 		if oldOwner == newOwner {
-			// Connected
-			addPlayer(conn, name)
-			if isFilteredPlayer(name) {
-				slog.Debug("Ignoring filtered player", "Player", name)
-				return nil
-			}
-			metadata, err := GetMetadata(conn.Object(name, dbus.ObjectPath(playerPath)))
-			if err != nil {
-				return err
-			}
-			nameToCurrent[name] = metadata
-			return callback(ctx, metadata)
+			handleNewPlayer(ctx, conn, name, callback)
 		} else {
 			// Disconnected
 			removePlayer(name)
 		}
 	}
 	return nil
+}
+
+func handleNewPlayer(ctx context.Context, conn *dbus.Conn, name string, callback StoreCallback) error {
+	// Connected
+	addPlayer(conn, name)
+	if isFilteredPlayer(name) {
+		slog.Debug("Ignoring filtered player", "Player", name)
+		return nil
+	}
+	metadata, err := GetMetadata(conn.Object(name, dbus.ObjectPath(playerPath)))
+	if err != nil {
+		return err
+	}
+	nameToCurrent[name] = metadata
+	return callback(ctx, metadata)
 }
 
 func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreCallback) error {
@@ -297,4 +313,20 @@ func (m *Metadata) IsSameTrack(other *Metadata) bool {
 	// Some services, e.g. Spotify, use the same URL for every song
 	// in the album.
 	return m.Url == other.Url && m.Title == other.Title
+}
+
+func GetExistingPlayers(ctx context.Context, conn *dbus.Conn) ([]string, error) {
+	systemBus := conn.Object(systemBusName, systemBusPath)
+	call := systemBus.CallWithContext(ctx, systemBusName+".ListNames", 0)
+	if call.Err != nil {
+		return nil, call.Err
+	}
+	if len(call.Body) != 1 {
+		return nil, ErrInvalidSignalBody
+	}
+	body, ok := call.Body[0].([]string)
+	if !ok {
+		return nil, ErrInvalidType
+	}
+	return body, nil
 }
