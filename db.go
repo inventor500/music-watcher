@@ -47,8 +47,16 @@ func StoreData(
 		tx.Rollback()
 		return err
 	}
+	var artSet = make(artistSet)
 	for _, set := range [][]string{data.AlbumArtist, data.Artist, data.Composer} {
 		for _, person := range set {
+			// Check if the person has been seen before
+			// Some songs have the same person listed as, e.g., the artist and the composer
+			if _, ok := artSet[person]; ok {
+				continue
+			} else {
+				artSet[person] = struct{}{}
+			}
 			// Could potentially add 2 records - One to "Person" and one to "Album_Person"
 			err := addPerson(ctx, tx, last, person)
 			if err != nil {
@@ -182,3 +190,5 @@ func CreateDatabaseStructure(conn *sql.DB) error {
 	}
 	return tx.Commit()
 }
+
+type artistSet map[string]struct{}

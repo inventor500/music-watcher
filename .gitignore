@@ -7,3 +7,6 @@ Emacs stuff
 
 # Executable
 cmd/music-watcher/music-watcher
+
+# Test stuff
+*.db

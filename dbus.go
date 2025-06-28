@@ -290,6 +290,11 @@ func removePlayer(name string) {
 	}
 }
 
+// Prevent repeated listing of the same track from being logged.
+// The Spotify web client will "update" the metadata to be the same
+// thing as it was before eight times every time it moves to a new track.
 func (m *Metadata) IsSameTrack(other *Metadata) bool {
-	return m.Url == other.Url
+	// Some services, e.g. Spotify, use the same URL for every song
+	// in the album.
+	return m.Url == other.Url && m.Title == other.Title
 }
