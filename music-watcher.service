@@ -1,0 +1,23 @@
+[Unit]
+Description=Daemon to monitor playing media over MPRIS
+
+[Service]
+ExecStart=/usr/bin/music-watcher
+Type=exec
+
+# Hardening
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProcSubset=pid
+ProtectProc=invisible
+CapabilityBoundingSet=empty
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogFacility=daemon
+
+[Install]
+WantedBy=default.target
