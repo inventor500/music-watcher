@@ -104,9 +104,13 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 		case sig := <-dbusChan:
 			switch sig.Name {
 			case nameOwnerSignal:
-				handleNewPlayerSignal(ctx, conn, sig, callback)
+				if err := handleNewPlayerSignal(ctx, conn, sig, callback); err != nil {
+					slog.ErrorContext(ctx, "Error handling new player", "Error", err)
+				}
 			case propertySignal:
-				handlePropertyChange(ctx, sig, callback)
+				if err := handlePropertyChange(ctx, sig, callback); err != nil {
+					slog.ErrorContext(ctx, "Error handling property change", "Error", err)
+				}
 			}
 		case <-sigChan:
 			slog.InfoContext(ctx, "Received shutdown signal")
@@ -175,12 +179,14 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 	if !ok {
 		return ErrInvalidSignalBody
 	}
-	// Only the property that changed will show up here
-	// E.g. only "PlaybackStatus" or "Metadata"
-	// "Metadata" and "PlaybackStatus" both show up when MPV exits
-	if _, ok := changed["PlaybackStatus"]; ok {
-		// This is a new player connecting, resuming, etc. We don't care about this
-		return nil
+	// MPV will not report complete metadata on startup, and then update its metadata field;
+	// Playback status also changes when this happens.
+	if status, ok := changed["PlaybackStatus"]; ok {
+		if s, ok := status.Value().(string); ok && s != "Playing" {
+			// Can be "Playing," "Paused," or "Stopped"
+			slog.Debug("Player is not playing, not logging", "Name", name, "Bus", bus)
+			return nil
+		}
 	}
 
 	_m, ok := changed["Metadata"]
