@@ -27,12 +27,12 @@ func StoreData(
 		return err
 	}
 	now := time.Now().Format(time.DateTime)
-	trackIdNumber, err := getTrack(ctx, tx, data.Title, data.TrackId, data.Url, data.Album)
+	trackIdNumber, err := getTrack(ctx, tx, data.Title, data.TrackId, data.Url, data.Album, [][]string{data.AlbumArtist, data.Artist, data.Composer})
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	res, err := tx.ExecContext(
+	_, err = tx.ExecContext(
 		ctx,
 		"INSERT INTO TrackLog (track, timestamp) VALUES (?, ?)",
 		trackIdNumber,
@@ -42,31 +42,7 @@ func StoreData(
 		tx.Rollback()
 		return err
 	}
-	last, err := res.LastInsertId()
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	var artSet = make(artistSet)
-	for _, set := range [][]string{data.AlbumArtist, data.Artist, data.Composer} {
-		for _, person := range set {
-			// Check if the person has been seen before
-			// Some songs have the same person listed as, e.g., the artist and the composer
-			if _, ok := artSet[person]; ok {
-				continue
-			} else {
-				artSet[person] = struct{}{}
-			}
-			// Could potentially add 2 records - One to "Person" and one to "Album_Person"
-			err := addPerson(ctx, tx, last, person)
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-		}
-	}
-	tx.Commit()
-	return nil
+	return tx.Commit()
 }
 
 // Create a mapping for track <-> person, creating person if necessary
@@ -101,7 +77,7 @@ func addPerson(ctx context.Context, tx *sql.Tx, trackId int64, person string) er
 }
 
 // Get the track id, creating the record if necessary
-func getTrack(ctx context.Context, tx *sql.Tx, title, trackId, url, album string) (int64, error) {
+func getTrack(ctx context.Context, tx *sql.Tx, title, trackId, url, album string, persons [][]string) (int64, error) {
 	// trackId parameter is the string uniquely identifying the track to the music industry, not our database
 	// Because trackId is often not present, (url, title) should uniquely identify the track
 	var id int64
@@ -126,7 +102,12 @@ func getTrack(ctx context.Context, tx *sql.Tx, title, trackId, url, album string
 			if err != nil {
 				return 0, err
 			}
-			return res.LastInsertId()
+			if id, err := res.LastInsertId(); err == nil {
+				err = insertPersons(ctx, tx, id, persons)
+				return id, err
+			} else {
+				return 0, err
+			}
 		} else { // No album specified
 			res, err := tx.ExecContext(
 				ctx,
@@ -138,13 +119,39 @@ func getTrack(ctx context.Context, tx *sql.Tx, title, trackId, url, album string
 			if err != nil {
 				return 0, err
 			}
-			return res.LastInsertId()
+			if id, err := res.LastInsertId(); err == nil {
+				return id, insertPersons(ctx, tx, id, persons)
+			} else {
+				return 0, err
+			}
 		}
 	case nil:
 		return id, nil
 	default:
 		return 0, err
 	}
+}
+
+func insertPersons(ctx context.Context, tx *sql.Tx, trackId int64, persons [][]string) error {
+	var artSet = make(artistSet)
+	for _, set := range persons {
+		for _, person := range set {
+			// Check if the person has been seen before
+			// Some songs have the same person listed as, e.g., the artist and the composer
+			if _, ok := artSet[person]; ok {
+				continue
+			} else {
+				artSet[person] = struct{}{}
+			}
+			// Could potentially add 2 records - One to "Person" and one to "Album_Person"
+			err := addPerson(ctx, tx, trackId, person)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Get the album ID, or insert it if it does not already exist
