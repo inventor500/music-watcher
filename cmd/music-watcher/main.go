@@ -35,7 +35,7 @@ func main() {
 	music.StartWatching(dbusConn, func(ctx context.Context, m *music.Metadata) error {
 		err := music.StoreData(ctx, m, db)
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to store value", "Error", err)
+			slog.ErrorContext(ctx, "Failed to store value", "Track", m.Title, "Album", m.Album, "Error", err)
 		}
 		return err
 	})

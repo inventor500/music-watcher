@@ -112,6 +112,7 @@ func getTrack(ctx context.Context, tx *sql.Tx, title, trackId, url, album string
 		if len(album) > 0 {
 			alb, err := getAlbum(ctx, tx, album)
 			if err != nil {
+				slog.ErrorContext(ctx, "Error inserting album into database", "Album", album, "Track", title, "Error", err)
 				return 0, err
 			}
 			res, err := tx.ExecContext(

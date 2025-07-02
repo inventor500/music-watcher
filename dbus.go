@@ -144,7 +144,7 @@ func handleNewPlayer(ctx context.Context, conn *dbus.Conn, name string, callback
 	// Connected
 	addPlayer(conn, name)
 	if isFilteredPlayer(name) {
-		slog.Debug("Ignoring filtered player", "Player", name)
+		slog.Debug("Ignoring filtered player", "Name", name)
 		return nil
 	}
 	metadata, err := GetMetadata(conn.Object(name, dbus.ObjectPath(playerPath)))
@@ -160,7 +160,7 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 	name, ok := busNameToName[bus]
 	if ok {
 		if isFilteredPlayer(name) {
-			slog.Debug("Ignoring filtered player", "Name", name)
+			slog.Debug("Ignoring filtered player", "Name", name, "Bus", bus)
 			return nil
 		}
 	} else {
@@ -169,7 +169,7 @@ func handlePropertyChange(ctx context.Context, sig *dbus.Signal, callback StoreC
 	}
 	slog.Debug("Detected change in player", "Name", name, "Bus", bus)
 	if len(sig.Body) < 1 {
-		return ErrInvalidSignalBody
+		return errors.Join(errors.New("signal has no body"), ErrInvalidSignalBody)
 	}
 	changed, ok := sig.Body[1].(map[string]dbus.Variant)
 	if !ok {
