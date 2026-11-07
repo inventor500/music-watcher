@@ -12,7 +12,7 @@ import (
 
 	dbus "github.com/godbus/dbus/v5"
 	music "github.com/inventor500/music-watcher"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {

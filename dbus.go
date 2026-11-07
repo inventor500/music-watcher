@@ -40,9 +40,10 @@ var nameToBusName = make(map[string]string)
 var nameToCurrent = make(map[string]*Metadata)
 
 const playerPath = "/org/mpris/MediaPlayer2"
+const playerInterface = "org.mpris.MediaPlayer2.Player"
 const systemBusPath = "/org/freedesktop/DBus"
 const systemBusName = "org.freedesktop.DBus"
-const propertiesChangedName = "org.freedesktop.DBus.Properties"
+const propertiesInterface = "org.freedesktop.DBus.Properties"
 const ownerChanged = "org.freedesktop/DBus.NameOwnerChanged"
 const introspectName = "org.freedesktop.DBus.Introspectable.Introspect"
 const nameOwnerSignal = "org.freedesktop.DBus.NameOwnerChanged"
@@ -82,9 +83,9 @@ func StartWatching(conn *dbus.Conn, callback StoreCallback) error {
 	// Property changes
 	if err := conn.AddMatchSignalContext(
 		ctx,
-		dbus.WithMatchInterface(propertiesChangedName),
+		dbus.WithMatchInterface(propertiesInterface),
 		dbus.WithMatchMember("PropertiesChanged"),
-		dbus.WithMatchArg(0, "org.mpris.MediaPlayer2.Player"),
+		dbus.WithMatchArg(0, playerInterface),
 	); err != nil {
 		return err
 	}
@@ -214,8 +215,6 @@ func (m *Metadata) String() string {
 }
 
 func GetMetadata(player dbus.BusObject) (*Metadata, error) {
-	const propertiesInterface = "org.freedesktop.DBus.Properties"
-	const playerInterface = "org.mpris.MediaPlayer2.Player"
 	call := player.Call(propertiesInterface+".Get", 0, playerInterface, "Metadata")
 	if call.Err != nil {
 		return nil, errors.Join(ErrMetadataFailed, call.Err)
